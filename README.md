@@ -37,7 +37,7 @@ broadcast-server/
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/broadcast-server.git
+   git clone https://github.com/nabobery/broadcast-server.git
    cd broadcast-server
    ```
 
