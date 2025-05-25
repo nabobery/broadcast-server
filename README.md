@@ -36,45 +36,51 @@ broadcast-server/
 ### From Source
 
 1. Clone the repository:
-   ```
-   git clone https://github.com/nabobery/broadcast-server.git
-   cd broadcast-server
+
+   ```bash
+      git clone https://github.com/nabobery/broadcast-server.git
+      cd broadcast-server
    ```
 
 2. Build the project:
-   ```
-   make build
+
+   ```bash
+      make build
    ```
 
 ## Usage
 
 ### Starting the Server
 
-```
+```bash
 ./build/broadcast-server start
 ```
 
 Optional flags:
+
 - `--port, -p`: Specify the port to listen on (default: 8080)
 
 Example:
-```
+
+```bash
 ./build/broadcast-server start --port 9090
 ```
 
 ### Connecting as a Client
 
-```
+```bash
 ./build/broadcast-server connect
 ```
 
 Optional flags:
+
 - `--host, -H`: Specify the host to connect to (default: localhost)
 - `--port, -p`: Specify the port to connect to (default: 8080)
 - `--username, -u`: Specify the username to use (default: anonymous)
 
 Example:
-```
+
+```bash
 ./build/broadcast-server connect --host 192.168.1.100 --port 9090 --username Alice
 ```
 
@@ -98,13 +104,15 @@ The application follows a clean architecture approach:
 
 ### Running Tests
 
-```
+```bash
 make test
 ```
 
+For comprehensive details on the test suite, including different test categories (unit, integration, benchmark), how to run them, race detection, coverage analysis, and guidelines for writing new tests, please refer to the [TESTING.md](TESTING.md) file.
+
 ### Cleaning Build Artifacts
 
-```
+```bash
 make clean
 ```
 
