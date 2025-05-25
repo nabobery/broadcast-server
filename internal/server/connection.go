@@ -3,11 +3,12 @@ package server
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
 	"time"
+
+	"broadcast-server/pkg/logger"
 )
 
 // Connection represents a client connection to the server
@@ -67,14 +68,14 @@ func (c *Connection) handleHandshake() {
 	// Send welcome message
 	err := c.Send("Welcome to the Broadcast Server!")
 	if err != nil {
-		log.Printf("Error sending welcome message to %s: %v", c.id, err)
+		logger.Error("Error sending welcome message to %s: %v", c.id, err)
 		c.Close()
 		return
 	}
 
 	err = c.Send("Please enter your username:")
 	if err != nil {
-		log.Printf("Error sending username prompt to %s: %v", c.id, err)
+		logger.Error("Error sending username prompt to %s: %v", c.id, err)
 		c.Close()
 		return
 	}
@@ -89,9 +90,9 @@ func (c *Connection) handleHandshake() {
 	} else {
 		// If scanner.Scan() returns false, it means the connection was closed or an error occurred
 		if scanner.Err() != nil {
-			log.Printf("Error reading username from %s: %v", c.id, scanner.Err())
+			logger.Error("Error reading username from %s: %v", c.id, scanner.Err())
 		} else {
-			log.Printf("Connection closed by client during username prompt: %s", c.id)
+			logger.Info("Connection closed by client during username prompt: %s", c.id)
 		}
 		c.Close()
 		return
@@ -100,7 +101,7 @@ func (c *Connection) handleHandshake() {
 	// Send confirmation
 	err = c.Send(fmt.Sprintf("Hello, %s! You are now connected. Type a message to broadcast it.", c.username))
 	if err != nil {
-		log.Printf("Error sending confirmation message to %s: %v", c.id, err)
+		logger.Error("Error sending confirmation message to %s: %v", c.id, err)
 		c.Close()
 		return
 	}
@@ -125,9 +126,9 @@ func (c *Connection) readLoop() {
 
 	// Client disconnected or error occurred
 	if scanner.Err() != nil {
-		log.Printf("Error reading from connection %s: %v", c.id, scanner.Err())
+		logger.Error("Error reading from connection %s: %v", c.id, scanner.Err())
 	} else {
-		log.Printf("Connection closed by client: %s", c.id)
+		logger.Info("Connection closed by client: %s", c.id)
 	}
 	c.Close()
 }

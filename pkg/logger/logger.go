@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"time"
@@ -47,8 +46,8 @@ func Fatal(format string, v ...interface{}) {
 
 // PrintServerBanner prints a server startup banner
 func PrintServerBanner(port int) {
-	fmt.Println("-------------------------------------")
-	fmt.Println("       Broadcast Server Started      ")
-	fmt.Printf("        Listening on port %d        \n", port)
-	fmt.Println("-------------------------------------")
+	Info("-------------------------------------")
+	Info("       Broadcast Server Started      ")
+	Info("        Listening on port %d        ", port)
+	Info("-------------------------------------")
 }

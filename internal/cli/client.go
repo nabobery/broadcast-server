@@ -1,9 +1,9 @@
 package cli
 
 import (
-	"fmt"
-
 	"broadcast-server/internal/client"
+	"broadcast-server/pkg/logger"
+
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +18,7 @@ func NewClientCommand() *cobra.Command {
 		Short: "Connect to a broadcast server",
 		Long:  `Connect to a broadcast server and send/receive messages.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Printf("Connecting to %s:%d as %s...\n", host, port, username)
+			logger.Info("Connecting to %s:%d as %s...", host, port, username)
 
 			c := client.NewClient(host, port, username)
 			return c.Connect()

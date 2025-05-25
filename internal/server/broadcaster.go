@@ -1,8 +1,9 @@
 package server
 
 import (
-	"fmt"
 	"sync"
+
+	"broadcast-server/pkg/logger"
 )
 
 // Broadcaster handles broadcasting messages to all connected clients
@@ -44,13 +45,13 @@ func (b *Broadcaster) Start() {
 
 		case message := <-b.broadcast:
 			// Send message to all connections
-			fmt.Printf("Broadcasting: %s\n", message)
+			logger.Debug("Broadcasting: %s", message)
 
 			b.connectionMutex.RLock()
 			for conn := range b.connections {
 				go func(c *Connection) {
 					if err := c.Send(message); err != nil {
-						fmt.Printf("Error sending to %s: %v\n", c.ID(), err)
+						logger.Error("Error sending to %s: %v", c.ID(), err)
 						b.Unregister(c)
 					}
 				}(conn)

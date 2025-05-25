@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"broadcast-server/pkg/logger"
 )
 
 // Client represents a client that connects to the broadcast server
@@ -39,7 +41,7 @@ func (c *Client) Connect() error {
 	defer func(conn net.Conn) {
 		err := conn.Close()
 		if err != nil {
-			fmt.Printf("Error closing connection: %v\n", err)
+			logger.Error("Error closing connection: %v", err)
 		}
 	}(c.conn)
 
@@ -91,7 +93,7 @@ func (c *Client) receiveMessages() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		fmt.Printf("Error reading from server: %v\n", err)
+		logger.Error("Error reading from server: %v", err)
 	}
 
 	fmt.Println("Disconnected from server.")
@@ -104,7 +106,7 @@ func (c *Client) sendMessages() {
 		message := scanner.Text()
 		_, err := fmt.Fprintln(c.conn, message)
 		if err != nil {
-			fmt.Printf("Error sending message: %v\n", err)
+			logger.Error("Error sending message: %v", err)
 			return
 		}
 	}

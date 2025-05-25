@@ -1,9 +1,9 @@
 package cli
 
 import (
-	"fmt"
-
 	"broadcast-server/internal/server"
+	"broadcast-server/pkg/logger"
+
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +16,7 @@ func NewServerCommand() *cobra.Command {
 		Short: "Start the broadcast server",
 		Long:  `Start a broadcast server that listens for client connections and broadcasts messages.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Printf("Starting broadcast server on port %d...\n", port)
+			logger.Info("Starting broadcast server on port %d...", port)
 
 			s := server.NewServer(port)
 			return s.Start()

@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"broadcast-server/pkg/logger"
 )
 
 // Server represents the broadcast server
@@ -38,11 +40,11 @@ func (s *Server) Start() error {
 	defer func(listener net.Listener) {
 		err := listener.Close()
 		if err != nil {
-			fmt.Printf("Error closing listener: %v\n", err)
+			logger.Error("Error closing listener: %v", err)
 		}
 	}(s.listener)
 
-	fmt.Printf("Server started on port %d\n", s.port)
+	logger.PrintServerBanner(s.port)
 
 	// Handle graceful shutdown
 	go s.handleSignals()
@@ -58,7 +60,7 @@ func (s *Server) Start() error {
 			if isClosedErr(err) {
 				return nil
 			}
-			fmt.Printf("Error accepting connection: %v\n", err)
+			logger.Error("Error accepting connection: %v", err)
 			continue
 		}
 
@@ -80,7 +82,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	s.connectionMutex.Unlock()
 
 	// Announce new connection
-	fmt.Printf("New client connected: %s (Total: %d)\n", clientID, connectionCount)
+	logger.Info("New client connected: %s (Total: %d)", clientID, connectionCount)
 	s.broadcaster.Broadcast(fmt.Sprintf("System: %s joined the chat", client.Username()))
 
 	// Start handling messages from this client
@@ -96,7 +98,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	s.connectionMutex.Unlock()
 
 	// Announce disconnection
-	fmt.Printf("Client disconnected: %s (Total: %d)\n", clientID, connectionCount)
+	logger.Info("Client disconnected: %s (Total: %d)", clientID, connectionCount)
 	s.broadcaster.Broadcast(fmt.Sprintf("System: %s left the chat", client.Username()))
 }
 
@@ -106,7 +108,7 @@ func (s *Server) handleSignals() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	fmt.Println("\nShutting down server...")
+	logger.Info("Shutting down server...")
 
 	// Close the listener to stop accepting new connections
 	if s.listener != nil {
@@ -126,7 +128,7 @@ func (s *Server) handleSignals() {
 	// Stop the broadcaster
 	s.broadcaster.Stop()
 
-	fmt.Println("Server shutdown complete")
+	logger.Info("Server shutdown complete")
 	os.Exit(0)
 }
 
