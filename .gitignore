@@ -1,0 +1,20 @@
+# Ignore everything
+*
+
+# But not these files...
+!*/
+!/.gitignore
+
+!*.go
+!go.sum
+!go.mod
+
+!.pre-commit-config.yaml
+
+!README.md
+!LICENSE
+
+!Makefile
+
+.idea/
+build/
