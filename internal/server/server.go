@@ -38,7 +38,14 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all connections
+		// Only allow localhost for development
+		// In production, this should be configured to allow specific origins
+		origin := r.Header.Get("Origin")
+		return origin == "" ||
+			origin == "http://localhost:8080" ||
+			origin == "http://127.0.0.1:8080" ||
+			origin == "ws://localhost:8080" ||
+			origin == "ws://127.0.0.1:8080"
 	},
 }
 
