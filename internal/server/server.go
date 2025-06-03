@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 )
@@ -24,6 +26,10 @@ const (
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 512
+
+	// Validation limits
+	maxUsernameLength = 50
+	maxMessageLength  = 500
 )
 
 // Client represents a connected websocket client
@@ -125,6 +131,15 @@ func (s *BroadcastServer) handleConnection(w http.ResponseWriter, r *http.Reques
 		username = r.RemoteAddr
 	}
 
+	// Validate username
+	if !validateUsername(username) {
+		log.Printf("Invalid username rejected: %s", username)
+		if err := conn.Close(); err != nil {
+			log.Printf("Error closing invalid connection: %v", err)
+		}
+		return
+	}
+
 	// Ensure unique username
 	s.mutex.Lock()
 	originalUsername := username
@@ -209,8 +224,15 @@ func (s *BroadcastServer) readPump(client *Client) {
 			continue
 		}
 
+		// Validate message content
+		messageStr := string(message)
+		if !validateMessage(messageStr) {
+			log.Printf("Invalid message from client %s, dropping message", client.ID)
+			continue
+		}
+
 		// Format message with username
-		formattedMsg := fmt.Sprintf("%s: %s", client.ID, string(message))
+		formattedMsg := fmt.Sprintf("%s: %s", client.ID, strings.TrimSpace(messageStr))
 		s.broadcast <- []byte(formattedMsg)
 	}
 }
@@ -292,4 +314,47 @@ func (s *BroadcastServer) run() {
 			s.mutex.Unlock()
 		}
 	}
+}
+
+// validateUsername checks if username is valid
+func validateUsername(username string) bool {
+	if len(username) == 0 || len(username) > maxUsernameLength {
+		return false
+	}
+
+	// Check for valid UTF-8
+	if !utf8.ValidString(username) {
+		return false
+	}
+
+	// Trim whitespace and check if empty
+	trimmed := strings.TrimSpace(username)
+	if len(trimmed) == 0 {
+		return false
+	}
+
+	// Prevent control characters and HTML injection
+	for _, r := range username {
+		if r < 32 || r == 127 { // Control characters
+			return false
+		}
+	}
+
+	return true
+}
+
+// validateMessage checks if message content is valid
+func validateMessage(message string) bool {
+	if len(message) == 0 || len(message) > maxMessageLength {
+		return false
+	}
+
+	// Check for valid UTF-8
+	if !utf8.ValidString(message) {
+		return false
+	}
+
+	// Trim whitespace and check if empty
+	trimmed := strings.TrimSpace(message)
+	return len(trimmed) > 0
 }
