@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -32,6 +36,8 @@ type BroadcastServer struct {
 	unregister chan *Client
 	broadcast  chan []byte
 	mutex      sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 var upgrader = websocket.Upgrader{
@@ -51,11 +57,14 @@ var upgrader = websocket.Upgrader{
 
 // NewBroadcastServer creates a new broadcast server instance
 func NewBroadcastServer() *BroadcastServer {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &BroadcastServer{
 		clients:    make(map[string]*Client),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		broadcast:  make(chan []byte),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
@@ -68,8 +77,33 @@ func Start(port string) error {
 		server.handleConnection(w, r)
 	})
 
+	// Create HTTP server
+	httpServer := &http.Server{
+		Addr: ":" + port,
+	}
+
+	// Handle shutdown signals
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+		<-c
+		log.Println("Shutting down server gracefully...")
+
+		// Cancel the context to stop the run loop
+		server.cancel()
+
+		// Shutdown HTTP server with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Printf("Server shutdown error: %v", err)
+		}
+	}()
+
 	log.Printf("Server started on port %s", port)
-	return http.ListenAndServe(":"+port, nil)
+	return httpServer.ListenAndServe()
 }
 
 func (s *BroadcastServer) handleConnection(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +198,18 @@ func (s *BroadcastServer) readPump(client *Client) {
 func (s *BroadcastServer) run() {
 	for {
 		select {
+		case <-s.ctx.Done():
+			log.Println("Broadcast server shutting down...")
+			// Close all client connections
+			s.mutex.Lock()
+			for _, client := range s.clients {
+				if err := client.Conn.Close(); err != nil {
+					log.Printf("Error closing client connection during shutdown: %v", err)
+				}
+			}
+			s.mutex.Unlock()
+			return
+
 		case client := <-s.register:
 			s.mutex.Lock()
 			s.clients[client.ID] = client
