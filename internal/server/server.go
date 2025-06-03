@@ -146,7 +146,7 @@ func (s *BroadcastServer) run() {
 					log.Printf("Error broadcasting to client %s: %v", client.ID, err)
 					err := client.Conn.Close()
 					if err != nil {
-						return
+						log.Printf("Error closing connection for client %s: %v", client.ID, err)
 					}
 					delete(s.clients, client.ID)
 				}
