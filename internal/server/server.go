@@ -18,6 +18,12 @@ const (
 	// Rate limiting: max 5 messages per second per client
 	maxMessagesPerSecond = 5
 	rateLimitWindow      = time.Second
+
+	// Connection timeouts
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 512
 )
 
 // Client represents a connected websocket client
@@ -146,6 +152,7 @@ func (s *BroadcastServer) handleConnection(w http.ResponseWriter, r *http.Reques
 
 	// Handle client messages
 	go s.readPump(client)
+	go s.writePump(client)
 }
 
 func (s *BroadcastServer) readPump(client *Client) {
@@ -158,6 +165,19 @@ func (s *BroadcastServer) readPump(client *Client) {
 			return
 		}
 	}()
+
+	// Set read deadline and message size limit
+	client.Conn.SetReadLimit(maxMessageSize)
+	if err := client.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		log.Printf("Error setting read deadline: %v", err)
+		return
+	}
+	client.Conn.SetPongHandler(func(string) error {
+		if err := client.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+			log.Printf("Error setting read deadline in pong handler: %v", err)
+		}
+		return nil
+	})
 
 	for {
 		_, message, err := client.Conn.ReadMessage()
@@ -192,6 +212,30 @@ func (s *BroadcastServer) readPump(client *Client) {
 		// Format message with username
 		formattedMsg := fmt.Sprintf("%s: %s", client.ID, string(message))
 		s.broadcast <- []byte(formattedMsg)
+	}
+}
+
+func (s *BroadcastServer) writePump(client *Client) {
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		if err := client.Conn.Close(); err != nil {
+			log.Printf("Error closing connection in writePump: %v", err)
+		}
+	}()
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := client.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				return
+			}
+			if err := client.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		case <-s.ctx.Done():
+			return
+		}
 	}
 }
 
@@ -231,6 +275,10 @@ func (s *BroadcastServer) run() {
 		case message := <-s.broadcast:
 			s.mutex.Lock()
 			for _, client := range s.clients {
+				if err := client.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+					log.Printf("Error setting write deadline for client %s: %v", client.ID, err)
+					continue
+				}
 				err := client.Conn.WriteMessage(websocket.TextMessage, message)
 				if err != nil {
 					log.Printf("Error broadcasting to client %s: %v", client.ID, err)
