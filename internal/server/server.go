@@ -5,14 +5,24 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+const (
+	// Rate limiting: max 5 messages per second per client
+	maxMessagesPerSecond = 5
+	rateLimitWindow      = time.Second
+)
+
 // Client represents a connected websocket client
 type Client struct {
-	ID   string
-	Conn *websocket.Conn
+	ID            string
+	Conn          *websocket.Conn
+	lastMessage   time.Time
+	messageCount  int
+	rateLimitTime time.Time
 }
 
 // BroadcastServer manages websocket connections and broadcasts messages
@@ -79,8 +89,11 @@ func (s *BroadcastServer) handleConnection(w http.ResponseWriter, r *http.Reques
 	s.mutex.Unlock()
 
 	client := &Client{
-		ID:   username,
-		Conn: conn,
+		ID:            username,
+		Conn:          conn,
+		lastMessage:   time.Now(),
+		messageCount:  0,
+		rateLimitTime: time.Now(),
 	}
 
 	// Register new client
@@ -119,6 +132,20 @@ func (s *BroadcastServer) readPump(client *Client) {
 				log.Printf("Error reading message from client %s: %v", client.ID, err)
 			}
 			break // Exit the read loop on any error (expected or unexpected)
+		}
+
+		// Rate limiting check
+		now := time.Now()
+		if now.Sub(client.rateLimitTime) >= rateLimitWindow {
+			// Reset rate limit window
+			client.rateLimitTime = now
+			client.messageCount = 0
+		}
+
+		client.messageCount++
+		if client.messageCount > maxMessagesPerSecond {
+			log.Printf("Rate limit exceeded for client %s, dropping message", client.ID)
+			continue
 		}
 
 		// Format message with username
