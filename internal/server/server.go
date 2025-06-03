@@ -68,6 +68,16 @@ func (s *BroadcastServer) handleConnection(w http.ResponseWriter, r *http.Reques
 		username = r.RemoteAddr
 	}
 
+	// Ensure unique username
+	s.mutex.Lock()
+	originalUsername := username
+	counter := 1
+	for _, exists := s.clients[username]; exists; _, exists = s.clients[username] {
+		username = fmt.Sprintf("%s_%d", originalUsername, counter)
+		counter++
+	}
+	s.mutex.Unlock()
+
 	client := &Client{
 		ID:   username,
 		Conn: conn,
