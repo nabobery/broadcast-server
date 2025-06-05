@@ -1,18 +1,44 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"strings"
 	"sync"
+	"syscall"
+	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 )
 
+const (
+	// Rate limiting: max 5 messages per second per client
+	maxMessagesPerSecond = 5
+	rateLimitWindow      = time.Second
+
+	// Connection timeouts
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 512
+
+	// Validation limits
+	maxUsernameLength = 50
+	maxMessageLength  = 500
+)
+
 // Client represents a connected websocket client
 type Client struct {
-	ID   string
-	Conn *websocket.Conn
+	ID            string
+	Conn          *websocket.Conn
+	lastMessage   time.Time
+	messageCount  int
+	rateLimitTime time.Time
 }
 
 // BroadcastServer manages websocket connections and broadcasts messages
@@ -22,23 +48,35 @@ type BroadcastServer struct {
 	unregister chan *Client
 	broadcast  chan []byte
 	mutex      sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all connections
+		// Only allow localhost for development
+		// In production, this should be configured to allow specific origins
+		origin := r.Header.Get("Origin")
+		return origin == "" ||
+			origin == "http://localhost:8080" ||
+			origin == "http://127.0.0.1:8080" ||
+			origin == "ws://localhost:8080" ||
+			origin == "ws://127.0.0.1:8080"
 	},
 }
 
 // NewBroadcastServer creates a new broadcast server instance
 func NewBroadcastServer() *BroadcastServer {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &BroadcastServer{
 		clients:    make(map[string]*Client),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		broadcast:  make(chan []byte),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
@@ -51,8 +89,33 @@ func Start(port string) error {
 		server.handleConnection(w, r)
 	})
 
+	// Create HTTP server
+	httpServer := &http.Server{
+		Addr: ":" + port,
+	}
+
+	// Handle shutdown signals
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+		<-c
+		log.Println("Shutting down server gracefully...")
+
+		// Cancel the context to stop the run loop
+		server.cancel()
+
+		// Shutdown HTTP server with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Printf("Server shutdown error: %v", err)
+		}
+	}()
+
 	log.Printf("Server started on port %s", port)
-	return http.ListenAndServe(":"+port, nil)
+	return httpServer.ListenAndServe()
 }
 
 func (s *BroadcastServer) handleConnection(w http.ResponseWriter, r *http.Request) {
@@ -68,9 +131,31 @@ func (s *BroadcastServer) handleConnection(w http.ResponseWriter, r *http.Reques
 		username = r.RemoteAddr
 	}
 
+	// Validate username
+	if !validateUsername(username) {
+		log.Printf("Invalid username rejected: %s", username)
+		if err := conn.Close(); err != nil {
+			log.Printf("Error closing invalid connection: %v", err)
+		}
+		return
+	}
+
+	// Ensure unique username
+	s.mutex.Lock()
+	originalUsername := username
+	counter := 1
+	for _, exists := s.clients[username]; exists; _, exists = s.clients[username] {
+		username = fmt.Sprintf("%s_%d", originalUsername, counter)
+		counter++
+	}
+	s.mutex.Unlock()
+
 	client := &Client{
-		ID:   username,
-		Conn: conn,
+		ID:            username,
+		Conn:          conn,
+		lastMessage:   time.Now(),
+		messageCount:  0,
+		rateLimitTime: time.Now(),
 	}
 
 	// Register new client
@@ -82,6 +167,7 @@ func (s *BroadcastServer) handleConnection(w http.ResponseWriter, r *http.Reques
 
 	// Handle client messages
 	go s.readPump(client)
+	go s.writePump(client)
 }
 
 func (s *BroadcastServer) readPump(client *Client) {
@@ -94,6 +180,19 @@ func (s *BroadcastServer) readPump(client *Client) {
 			return
 		}
 	}()
+
+	// Set read deadline and message size limit
+	client.Conn.SetReadLimit(maxMessageSize)
+	if err := client.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		log.Printf("Error setting read deadline: %v", err)
+		return
+	}
+	client.Conn.SetPongHandler(func(string) error {
+		if err := client.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+			log.Printf("Error setting read deadline in pong handler: %v", err)
+		}
+		return nil
+	})
 
 	for {
 		_, message, err := client.Conn.ReadMessage()
@@ -111,15 +210,72 @@ func (s *BroadcastServer) readPump(client *Client) {
 			break // Exit the read loop on any error (expected or unexpected)
 		}
 
+		// Rate limiting check
+		now := time.Now()
+		if now.Sub(client.rateLimitTime) >= rateLimitWindow {
+			// Reset rate limit window
+			client.rateLimitTime = now
+			client.messageCount = 0
+		}
+
+		client.messageCount++
+		if client.messageCount > maxMessagesPerSecond {
+			log.Printf("Rate limit exceeded for client %s, dropping message", client.ID)
+			continue
+		}
+
+		// Validate message content
+		messageStr := string(message)
+		if !validateMessage(messageStr) {
+			log.Printf("Invalid message from client %s, dropping message", client.ID)
+			continue
+		}
+
 		// Format message with username
-		formattedMsg := fmt.Sprintf("%s: %s", client.ID, string(message))
+		formattedMsg := fmt.Sprintf("%s: %s", client.ID, strings.TrimSpace(messageStr))
 		s.broadcast <- []byte(formattedMsg)
+	}
+}
+
+func (s *BroadcastServer) writePump(client *Client) {
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		if err := client.Conn.Close(); err != nil {
+			log.Printf("Error closing connection in writePump: %v", err)
+		}
+	}()
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := client.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				return
+			}
+			if err := client.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		case <-s.ctx.Done():
+			return
+		}
 	}
 }
 
 func (s *BroadcastServer) run() {
 	for {
 		select {
+		case <-s.ctx.Done():
+			log.Println("Broadcast server shutting down...")
+			// Close all client connections
+			s.mutex.Lock()
+			for _, client := range s.clients {
+				if err := client.Conn.Close(); err != nil {
+					log.Printf("Error closing client connection during shutdown: %v", err)
+				}
+			}
+			s.mutex.Unlock()
+			return
+
 		case client := <-s.register:
 			s.mutex.Lock()
 			s.clients[client.ID] = client
@@ -141,12 +297,16 @@ func (s *BroadcastServer) run() {
 		case message := <-s.broadcast:
 			s.mutex.Lock()
 			for _, client := range s.clients {
+				if err := client.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+					log.Printf("Error setting write deadline for client %s: %v", client.ID, err)
+					continue
+				}
 				err := client.Conn.WriteMessage(websocket.TextMessage, message)
 				if err != nil {
 					log.Printf("Error broadcasting to client %s: %v", client.ID, err)
 					err := client.Conn.Close()
 					if err != nil {
-						return
+						log.Printf("Error closing connection for client %s: %v", client.ID, err)
 					}
 					delete(s.clients, client.ID)
 				}
@@ -154,4 +314,47 @@ func (s *BroadcastServer) run() {
 			s.mutex.Unlock()
 		}
 	}
+}
+
+// validateUsername checks if username is valid
+func validateUsername(username string) bool {
+	if len(username) == 0 || len(username) > maxUsernameLength {
+		return false
+	}
+
+	// Check for valid UTF-8
+	if !utf8.ValidString(username) {
+		return false
+	}
+
+	// Trim whitespace and check if empty
+	trimmed := strings.TrimSpace(username)
+	if len(trimmed) == 0 {
+		return false
+	}
+
+	// Prevent control characters and HTML injection
+	for _, r := range username {
+		if r < 32 || r == 127 { // Control characters
+			return false
+		}
+	}
+
+	return true
+}
+
+// validateMessage checks if message content is valid
+func validateMessage(message string) bool {
+	if len(message) == 0 || len(message) > maxMessageLength {
+		return false
+	}
+
+	// Check for valid UTF-8
+	if !utf8.ValidString(message) {
+		return false
+	}
+
+	// Trim whitespace and check if empty
+	trimmed := strings.TrimSpace(message)
+	return len(trimmed) > 0
 }
